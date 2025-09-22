@@ -68,11 +68,23 @@ public class MatchingEngine {
                 sell.setQuantity(sell.getQuantity() - qty);
 
                 if (buy.getQuantity() == 0) {
-                    buyOrders.poll().setStatus("FILLED");
+                    Order filledBuy = buyOrders.poll();
+                    assert filledBuy != null;
+                    filledBuy.setStatus("FILLED");
+                    orderRepo.save(filledBuy);
+                } else {
+                    orderRepo.save(buy);
                 }
+
                 if (sell.getQuantity() == 0) {
-                    sellOrders.poll().setStatus("FILLED");
+                    Order filledSell = sellOrders.poll();
+                    assert filledSell != null;
+                    filledSell.setStatus("FILLED");
+                    orderRepo.save(filledSell);
+                } else {
+                    orderRepo.save(sell);
                 }
+
             } else {
                 break; // No match possible
             }
