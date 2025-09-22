@@ -81,7 +81,7 @@ public class MatchingEngine {
     }
 
     @Transactional
-    private void executeMatch(Order buyOrder, Order sellOrder) {
+    protected void executeMatch(Order buyOrder, Order sellOrder) {
         int tradeQuantity = Math.min(buyOrder.getQuantity(), sellOrder.getQuantity());
         double tradePrice = sellOrder.getPrice(); // Price improvement for buyer
 
