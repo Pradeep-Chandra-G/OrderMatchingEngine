@@ -17,7 +17,8 @@ public class MatchingEngine {
     private final RiskCheckService riskService;
     private final ReentrantLock matchingLock = new ReentrantLock();
 
-    public MatchingEngine(OrderRepository orderRepo, TradeRepository tradeRepo, TraderRepository traderRepo, RiskCheckService riskService) {
+    public MatchingEngine(OrderRepository orderRepo, TradeRepository tradeRepo,
+                          TraderRepository traderRepo, RiskCheckService riskService) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
         this.traderRepo = traderRepo;
@@ -30,27 +31,35 @@ public class MatchingEngine {
         if (!riskService.validate(order)) {
             order.setStatus("REJECTED");
             orderRepo.save(order);
+            System.out.println("Order REJECTED for " + order.getSymbol() + " - Risk check failed");
             return;
         }
 
         // Save order as OPEN
         order.setStatus("OPEN");
         orderRepo.save(order);
+        System.out.println("Order OPEN for " + order.getSymbol() + ": " + order.getType() +
+                " " + order.getQuantity() + " @ $" + order.getPrice());
 
-        // Try to match with existing orders
+        // Try to match with existing orders for this symbol
         matchingLock.lock();
         try {
-            matchOrders();
+            matchOrdersForSymbol(order.getSymbol());
         } finally {
             matchingLock.unlock();
         }
     }
 
-    private void matchOrders() {
-        // Get all open buy orders (highest price first)
-        List<Order> buyOrders = orderRepo.findByStatusAndTypeOrderByPriceDescTimestampAsc("OPEN", "BUY");
-        // Get all open sell orders (lowest price first)
-        List<Order> sellOrders = orderRepo.findByStatusAndTypeOrderByPriceAscTimestampAsc("OPEN", "SELL");
+    private void matchOrdersForSymbol(String symbol) {
+        System.out.println("Matching orders for symbol: " + symbol);
+
+        // Get all open buy orders for this symbol (highest price first)
+        List<Order> buyOrders = orderRepo.findByStatusAndTypeAndSymbolOrderByPriceDescTimestampAsc("OPEN", "BUY", symbol);
+
+        // Get all open sell orders for this symbol (lowest price first)
+        List<Order> sellOrders = orderRepo.findByStatusAndTypeAndSymbolOrderByPriceAscTimestampAsc("OPEN", "SELL", symbol);
+
+        System.out.println("Found " + buyOrders.size() + " buy orders and " + sellOrders.size() + " sell orders for " + symbol);
 
         for (Order buyOrder : buyOrders) {
             if (!"OPEN".equals(buyOrder.getStatus())) continue;
@@ -58,7 +67,7 @@ public class MatchingEngine {
             for (Order sellOrder : sellOrders) {
                 if (!"OPEN".equals(sellOrder.getStatus())) continue;
 
-                // Check if orders can match
+                // Check if orders can match (buy price >= sell price)
                 if (buyOrder.getPrice() >= sellOrder.getPrice()) {
                     executeMatch(buyOrder, sellOrder);
 
@@ -75,6 +84,9 @@ public class MatchingEngine {
     private void executeMatch(Order buyOrder, Order sellOrder) {
         int tradeQuantity = Math.min(buyOrder.getQuantity(), sellOrder.getQuantity());
         double tradePrice = sellOrder.getPrice(); // Price improvement for buyer
+
+        System.out.println("Executing trade: " + tradeQuantity + " shares of " + buyOrder.getSymbol() +
+                " at $" + tradePrice);
 
         // Create trade record
         Trade trade = new Trade();
@@ -97,7 +109,8 @@ public class MatchingEngine {
         }
 
         // Update trader positions and balances
-        updateTraderBalanceAndPosition(buyOrder.getTrader(), sellOrder.getTrader(), tradePrice, tradeQuantity);
+        updateTraderBalanceAndPosition(buyOrder.getTrader(), sellOrder.getTrader(),
+                buyOrder.getSymbol(), tradePrice, tradeQuantity);
 
         // Save updated traders
         traderRepo.save(buyOrder.getTrader());
@@ -107,19 +120,36 @@ public class MatchingEngine {
         orderRepo.save(buyOrder);
         orderRepo.save(sellOrder);
 
-        System.out.println("Trade executed: " + tradeQuantity + " shares at $" + tradePrice);
+        System.out.println("Trade executed successfully for " + buyOrder.getSymbol());
     }
 
-    private void updateTraderBalanceAndPosition(Trader buyer, Trader seller, double price, int quantity) {
+    private void updateTraderBalanceAndPosition(Trader buyer, Trader seller, String symbol, double price, int quantity) {
         // Update buyer: decrease cash, increase stock position
-        buyer.setBalance(buyer.getBalance() - (price * quantity));
-        buyer.getPositions().merge("STOCK", quantity, Integer::sum);
+        double totalCost = price * quantity;
+        buyer.setBalance(buyer.getBalance() - totalCost);
+        buyer.getPositions().merge(symbol, quantity, Integer::sum);
 
         // Update seller: increase cash, decrease stock position
-        seller.setBalance(seller.getBalance() + (price * quantity));
-        seller.getPositions().merge("STOCK", -quantity, Integer::sum);
+        seller.setBalance(seller.getBalance() + totalCost);
+        seller.getPositions().merge(symbol, -quantity, Integer::sum);
 
-        System.out.println("Updated positions - Buyer: " + buyer.getPositions().get("STOCK") +
-                ", Seller: " + seller.getPositions().get("STOCK"));
+        System.out.println("Updated positions for " + symbol +
+                " - Buyer: " + buyer.getPositions().get(symbol) +
+                ", Seller: " + seller.getPositions().get(symbol));
+    }
+
+    // Method to match all pending orders (useful for system startup)
+    public void matchAllPendingOrders() {
+        List<String> symbols = orderRepo.findDistinctSymbolsByStatus("OPEN");
+        System.out.println("Matching pending orders for symbols: " + symbols);
+
+        matchingLock.lock();
+        try {
+            for (String symbol : symbols) {
+                matchOrdersForSymbol(symbol);
+            }
+        } finally {
+            matchingLock.unlock();
+        }
     }
 }

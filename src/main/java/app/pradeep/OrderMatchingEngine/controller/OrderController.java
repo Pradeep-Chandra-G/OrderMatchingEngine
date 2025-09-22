@@ -27,6 +27,7 @@ public class OrderController {
     // DTO for cleaner API
     public static class OrderRequest {
         private UUID traderId;
+        private String symbol;     // Stock symbol (AAPL, GOOGL, etc.)
         private String type;       // BUY / SELL
         private String orderType;  // LIMIT / MARKET
         private double price;
@@ -35,6 +36,8 @@ public class OrderController {
         // Getters & setters
         public UUID getTraderId() { return traderId; }
         public void setTraderId(UUID traderId) { this.traderId = traderId; }
+        public String getSymbol() { return symbol; }
+        public void setSymbol(String symbol) { this.symbol = symbol; }
         public String getType() { return type; }
         public void setType(String type) { this.type = type; }
         public String getOrderType() { return orderType; }
@@ -47,23 +50,39 @@ public class OrderController {
 
     @PostMapping
     public String placeOrder(@RequestBody OrderRequest request) {
+        // Validate required fields
+        if (request.getSymbol() == null || request.getSymbol().trim().isEmpty()) {
+            throw new RuntimeException("Symbol is required");
+        }
+
         Trader trader = traderRepo.findById(request.getTraderId())
                 .orElseThrow(() -> new RuntimeException("Trader not found"));
 
         Order order = new Order();
         order.setTrader(trader);
+        order.setSymbol(request.getSymbol().toUpperCase()); // Normalize to uppercase
         order.setType(request.getType());
         order.setOrderType(request.getOrderType());
         order.setPrice(request.getPrice());
         order.setQuantity(request.getQuantity());
 
         engine.submitOrder(order);
-        return "Order submitted: " + order.getId();
+        return "Order submitted: " + order.getId() + " for " + order.getSymbol();
     }
 
     @GetMapping
     public List<Order> getAllOrders() {
         return orderRepo.findAll();
+    }
+
+    @GetMapping("/symbol/{symbol}")
+    public List<Order> getOrdersBySymbol(@PathVariable String symbol) {
+        return orderRepo.findBySymbol(symbol.toUpperCase());
+    }
+
+    @GetMapping("/symbol/{symbol}/status/{status}")
+    public List<Order> getOrdersBySymbolAndStatus(@PathVariable String symbol, @PathVariable String status) {
+        return orderRepo.findBySymbolAndStatus(symbol.toUpperCase(), status.toUpperCase());
     }
 
     @DeleteMapping("/{id}")

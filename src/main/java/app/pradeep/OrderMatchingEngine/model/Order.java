@@ -14,12 +14,13 @@ public class Order {
     @ManyToOne
     private Trader trader;
 
-    private String type; // BUY / SELL
-    private String orderType; // LIMIT / MARKET
+    private String symbol;       // Stock symbol (AAPL, GOOGL, MSFT, etc.)
+    private String type;         // BUY / SELL
+    private String orderType;    // LIMIT / MARKET
     private double price;
     private int quantity;
     private long timestamp = Instant.now().toEpochMilli();
-    private String status = "OPEN"; // OPEN / FILLED / CANCELLED
+    private String status = "OPEN"; // OPEN / FILLED / CANCELLED / REJECTED
 
     // Getters and Setters
 
@@ -37,6 +38,14 @@ public class Order {
 
     public void setTrader(Trader trader) {
         this.trader = trader;
+    }
+
+    public String getSymbol() {
+        return symbol;
+    }
+
+    public void setSymbol(String symbol) {
+        this.symbol = symbol;
     }
 
     public String getType() {
@@ -87,4 +96,3 @@ public class Order {
         this.status = status;
     }
 }
-
