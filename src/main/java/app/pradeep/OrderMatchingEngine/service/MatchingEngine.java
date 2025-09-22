@@ -3,91 +3,123 @@ package app.pradeep.OrderMatchingEngine.service;
 import app.pradeep.OrderMatchingEngine.model.*;
 import app.pradeep.OrderMatchingEngine.repository.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.PriorityQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Service
 public class MatchingEngine {
 
     private final OrderRepository orderRepo;
     private final TradeRepository tradeRepo;
+    private final TraderRepository traderRepo;
     private final RiskCheckService riskService;
+    private final ReentrantLock matchingLock = new ReentrantLock();
 
-    // Concurrent queues for buy/sell orders
-    private PriorityQueue<Order> buyOrders = new PriorityQueue<>(
-            (a, b) -> Double.compare(b.getPrice(), a.getPrice())); // Highest price first
-    private PriorityQueue<Order> sellOrders = new PriorityQueue<>(
-            (a, b) -> Double.compare(a.getPrice(), b.getPrice())); // Lowest price first
-
-    private ExecutorService executor = Executors.newFixedThreadPool(4);
-
-    public MatchingEngine(OrderRepository orderRepo, TradeRepository tradeRepo, RiskCheckService riskService) {
+    public MatchingEngine(OrderRepository orderRepo, TradeRepository tradeRepo, TraderRepository traderRepo, RiskCheckService riskService) {
         this.orderRepo = orderRepo;
         this.tradeRepo = tradeRepo;
+        this.traderRepo = traderRepo;
         this.riskService = riskService;
     }
 
+    @Transactional
     public void submitOrder(Order order) {
-        executor.submit(() -> {
-            if (!riskService.validate(order)) {
-                order.setStatus("REJECTED");
-                orderRepo.save(order);
-                return;
-            }
-
-            if ("BUY".equals(order.getType())) {
-                buyOrders.add(order);
-            } else {
-                sellOrders.add(order);
-            }
-
-            matchOrders();
+        // Validate order first
+        if (!riskService.validate(order)) {
+            order.setStatus("REJECTED");
             orderRepo.save(order);
-        });
+            return;
+        }
+
+        // Save order as OPEN
+        order.setStatus("OPEN");
+        orderRepo.save(order);
+
+        // Try to match with existing orders
+        matchingLock.lock();
+        try {
+            matchOrders();
+        } finally {
+            matchingLock.unlock();
+        }
     }
 
     private void matchOrders() {
-        while (!buyOrders.isEmpty() && !sellOrders.isEmpty()) {
-            Order buy = buyOrders.peek();
-            Order sell = sellOrders.peek();
+        // Get all open buy orders (highest price first)
+        List<Order> buyOrders = orderRepo.findByStatusAndTypeOrderByPriceDescTimestampAsc("OPEN", "BUY");
+        // Get all open sell orders (lowest price first)
+        List<Order> sellOrders = orderRepo.findByStatusAndTypeOrderByPriceAscTimestampAsc("OPEN", "SELL");
 
-            if (buy.getPrice() >= sell.getPrice()) {
-                int qty = Math.min(buy.getQuantity(), sell.getQuantity());
-                double tradePrice = sell.getPrice();
+        for (Order buyOrder : buyOrders) {
+            if (!"OPEN".equals(buyOrder.getStatus())) continue;
 
-                Trade trade = new Trade();
-                trade.setBuyOrder(buy);
-                trade.setSellOrder(sell);
-                trade.setQuantity(qty);
-                trade.setPrice(tradePrice);
-                tradeRepo.save(trade);
+            for (Order sellOrder : sellOrders) {
+                if (!"OPEN".equals(sellOrder.getStatus())) continue;
 
-                buy.setQuantity(buy.getQuantity() - qty);
-                sell.setQuantity(sell.getQuantity() - qty);
+                // Check if orders can match
+                if (buyOrder.getPrice() >= sellOrder.getPrice()) {
+                    executeMatch(buyOrder, sellOrder);
 
-                if (buy.getQuantity() == 0) {
-                    Order filledBuy = buyOrders.poll();
-                    assert filledBuy != null;
-                    filledBuy.setStatus("FILLED");
-                    orderRepo.save(filledBuy);
-                } else {
-                    orderRepo.save(buy);
+                    // If buy order is fully filled, move to next buy order
+                    if (!"OPEN".equals(buyOrder.getStatus())) {
+                        break;
+                    }
                 }
-
-                if (sell.getQuantity() == 0) {
-                    Order filledSell = sellOrders.poll();
-                    assert filledSell != null;
-                    filledSell.setStatus("FILLED");
-                    orderRepo.save(filledSell);
-                } else {
-                    orderRepo.save(sell);
-                }
-
-            } else {
-                break; // No match possible
             }
         }
+    }
+
+    @Transactional
+    private void executeMatch(Order buyOrder, Order sellOrder) {
+        int tradeQuantity = Math.min(buyOrder.getQuantity(), sellOrder.getQuantity());
+        double tradePrice = sellOrder.getPrice(); // Price improvement for buyer
+
+        // Create trade record
+        Trade trade = new Trade();
+        trade.setBuyOrder(buyOrder);
+        trade.setSellOrder(sellOrder);
+        trade.setQuantity(tradeQuantity);
+        trade.setPrice(tradePrice);
+        tradeRepo.save(trade);
+
+        // Update order quantities
+        buyOrder.setQuantity(buyOrder.getQuantity() - tradeQuantity);
+        sellOrder.setQuantity(sellOrder.getQuantity() - tradeQuantity);
+
+        // Update order status
+        if (buyOrder.getQuantity() == 0) {
+            buyOrder.setStatus("FILLED");
+        }
+        if (sellOrder.getQuantity() == 0) {
+            sellOrder.setStatus("FILLED");
+        }
+
+        // Update trader positions and balances
+        updateTraderBalanceAndPosition(buyOrder.getTrader(), sellOrder.getTrader(), tradePrice, tradeQuantity);
+
+        // Save updated traders
+        traderRepo.save(buyOrder.getTrader());
+        traderRepo.save(sellOrder.getTrader());
+
+        // Save updated orders
+        orderRepo.save(buyOrder);
+        orderRepo.save(sellOrder);
+
+        System.out.println("Trade executed: " + tradeQuantity + " shares at $" + tradePrice);
+    }
+
+    private void updateTraderBalanceAndPosition(Trader buyer, Trader seller, double price, int quantity) {
+        // Update buyer: decrease cash, increase stock position
+        buyer.setBalance(buyer.getBalance() - (price * quantity));
+        buyer.getPositions().merge("STOCK", quantity, Integer::sum);
+
+        // Update seller: increase cash, decrease stock position
+        seller.setBalance(seller.getBalance() + (price * quantity));
+        seller.getPositions().merge("STOCK", -quantity, Integer::sum);
+
+        System.out.println("Updated positions - Buyer: " + buyer.getPositions().get("STOCK") +
+                ", Seller: " + seller.getPositions().get("STOCK"));
     }
 }
