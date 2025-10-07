@@ -5,7 +5,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "Orders")
+@Table(name = "orders")
 public class Order {
 
     @Id
