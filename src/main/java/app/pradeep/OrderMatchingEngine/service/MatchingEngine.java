@@ -2,6 +2,8 @@ package app.pradeep.OrderMatchingEngine.service;
 
 import app.pradeep.OrderMatchingEngine.model.*;
 import app.pradeep.OrderMatchingEngine.repository.*;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +18,9 @@ public class MatchingEngine {
     private final TraderRepository traderRepo;
     private final RiskCheckService riskService;
     private final ReentrantLock matchingLock = new ReentrantLock();
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     public MatchingEngine(OrderRepository orderRepo, TradeRepository tradeRepo,
                           TraderRepository traderRepo, RiskCheckService riskService) {
@@ -38,6 +43,10 @@ public class MatchingEngine {
         // Save order as OPEN
         order.setStatus("OPEN");
         orderRepo.save(order);
+
+        // IMPORTANT: Flush to ensure the order is persisted to DB
+        entityManager.flush();
+
         System.out.println("Order OPEN for " + order.getSymbol() + ": " + order.getType() +
                 " " + order.getQuantity() + " @ $" + order.getPrice());
 
@@ -62,9 +71,15 @@ public class MatchingEngine {
         System.out.println("Found " + buyOrders.size() + " buy orders and " + sellOrders.size() + " sell orders for " + symbol);
 
         for (Order buyOrder : buyOrders) {
+            // Refresh to get latest state from DB
+            entityManager.refresh(buyOrder);
+
             if (!"OPEN".equals(buyOrder.getStatus())) continue;
 
             for (Order sellOrder : sellOrders) {
+                // Refresh to get latest state from DB
+                entityManager.refresh(sellOrder);
+
                 if (!"OPEN".equals(sellOrder.getStatus())) continue;
 
                 // Check if orders can match (buy price >= sell price)
@@ -120,6 +135,9 @@ public class MatchingEngine {
         orderRepo.save(buyOrder);
         orderRepo.save(sellOrder);
 
+        // Flush changes to DB
+        entityManager.flush();
+
         System.out.println("Trade executed successfully for " + buyOrder.getSymbol());
     }
 
@@ -139,6 +157,7 @@ public class MatchingEngine {
     }
 
     // Method to match all pending orders (useful for system startup)
+    @Transactional
     public void matchAllPendingOrders() {
         List<String> symbols = orderRepo.findDistinctSymbolsByStatus("OPEN");
         System.out.println("Matching pending orders for symbols: " + symbols);
