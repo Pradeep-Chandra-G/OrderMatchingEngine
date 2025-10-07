@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 @Service
@@ -17,7 +18,9 @@ public class MatchingEngine {
     private final TradeRepository tradeRepo;
     private final TraderRepository traderRepo;
     private final RiskCheckService riskService;
-    private final ReentrantLock matchingLock = new ReentrantLock();
+
+    // CHANGE 1: Per-symbol locks instead of single global lock
+    private final ConcurrentHashMap<String, ReentrantLock> symbolLocks = new ConcurrentHashMap<>();
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -28,6 +31,11 @@ public class MatchingEngine {
         this.tradeRepo = tradeRepo;
         this.traderRepo = traderRepo;
         this.riskService = riskService;
+    }
+
+    // CHANGE 2: Helper method to get lock for specific symbol
+    private ReentrantLock getLockForSymbol(String symbol) {
+        return symbolLocks.computeIfAbsent(symbol, k -> new ReentrantLock());
     }
 
     @Transactional
@@ -44,18 +52,19 @@ public class MatchingEngine {
         order.setStatus("OPEN");
         orderRepo.save(order);
 
-        // IMPORTANT: Flush to ensure the order is persisted to DB
+        // CHANGE 3: Only flush once, not twice
         entityManager.flush();
 
         System.out.println("Order OPEN for " + order.getSymbol() + ": " + order.getType() +
                 " " + order.getQuantity() + " @ $" + order.getPrice());
 
-        // Try to match with existing orders for this symbol
-        matchingLock.lock();
+        // CHANGE 4: Use per-symbol lock
+        ReentrantLock lock = getLockForSymbol(order.getSymbol());
+        lock.lock();
         try {
             matchOrdersForSymbol(order.getSymbol());
         } finally {
-            matchingLock.unlock();
+            lock.unlock();
         }
     }
 
@@ -70,24 +79,45 @@ public class MatchingEngine {
 
         System.out.println("Found " + buyOrders.size() + " buy orders and " + sellOrders.size() + " sell orders for " + symbol);
 
-        for (Order buyOrder : buyOrders) {
-            // Refresh to get latest state from DB
-            entityManager.refresh(buyOrder);
+        // CHANGE 5: Track which orders to refresh after modifications
+        boolean buyOrderModified = false;
 
-            if (!"OPEN".equals(buyOrder.getStatus())) continue;
+        for (Order buyOrder : buyOrders) {
+            // CHANGE 6: Refresh only if previously modified in this iteration
+            if (buyOrderModified) {
+                entityManager.refresh(buyOrder);
+                buyOrderModified = false;
+            }
+
+            // CHANGE 7: Check in-memory state first (avoid DB hit)
+            if (!"OPEN".equals(buyOrder.getStatus()) || buyOrder.getQuantity() == 0) {
+                continue;
+            }
+
+            boolean sellOrderModified = false;
 
             for (Order sellOrder : sellOrders) {
-                // Refresh to get latest state from DB
-                entityManager.refresh(sellOrder);
+                // CHANGE 8: Refresh only if previously modified
+                if (sellOrderModified) {
+                    entityManager.refresh(sellOrder);
+                    sellOrderModified = false;
+                }
 
-                if (!"OPEN".equals(sellOrder.getStatus())) continue;
+                // CHANGE 9: Check in-memory state first
+                if (!"OPEN".equals(sellOrder.getStatus()) || sellOrder.getQuantity() == 0) {
+                    continue;
+                }
 
                 // Check if orders can match (buy price >= sell price)
                 if (buyOrder.getPrice() >= sellOrder.getPrice()) {
                     executeMatch(buyOrder, sellOrder);
 
+                    // Mark that orders were modified
+                    buyOrderModified = true;
+                    sellOrderModified = true;
+
                     // If buy order is fully filled, move to next buy order
-                    if (!"OPEN".equals(buyOrder.getStatus())) {
+                    if (buyOrder.getQuantity() == 0 || !"OPEN".equals(buyOrder.getStatus())) {
                         break;
                     }
                 }
@@ -111,7 +141,7 @@ public class MatchingEngine {
         trade.setPrice(tradePrice);
         tradeRepo.save(trade);
 
-        // Update order quantities
+        // Update order quantities (in-memory first)
         buyOrder.setQuantity(buyOrder.getQuantity() - tradeQuantity);
         sellOrder.setQuantity(sellOrder.getQuantity() - tradeQuantity);
 
@@ -127,16 +157,14 @@ public class MatchingEngine {
         updateTraderBalanceAndPosition(buyOrder.getTrader(), sellOrder.getTrader(),
                 buyOrder.getSymbol(), tradePrice, tradeQuantity);
 
-        // Save updated traders
+        // CHANGE 10: Batch save operations
         traderRepo.save(buyOrder.getTrader());
         traderRepo.save(sellOrder.getTrader());
-
-        // Save updated orders
         orderRepo.save(buyOrder);
         orderRepo.save(sellOrder);
 
-        // Flush changes to DB
-        entityManager.flush();
+        // CHANGE 11: Remove intermediate flush - let Spring batch at transaction end
+        // entityManager.flush(); // REMOVED
 
         System.out.println("Trade executed successfully for " + buyOrder.getSymbol());
     }
@@ -162,13 +190,22 @@ public class MatchingEngine {
         List<String> symbols = orderRepo.findDistinctSymbolsByStatus("OPEN");
         System.out.println("Matching pending orders for symbols: " + symbols);
 
-        matchingLock.lock();
-        try {
-            for (String symbol : symbols) {
+        // CHANGE 12: Process each symbol with its own lock (allows parallelization)
+        for (String symbol : symbols) {
+            ReentrantLock lock = getLockForSymbol(symbol);
+            lock.lock();
+            try {
                 matchOrdersForSymbol(symbol);
+            } finally {
+                lock.unlock();
             }
-        } finally {
-            matchingLock.unlock();
         }
+    }
+
+    // CHANGE 13: Add method to clear locks for symbols with no open orders (optional cleanup)
+    public void cleanupUnusedLocks() {
+        List<String> activeSymbols = orderRepo.findDistinctSymbolsByStatus("OPEN");
+        symbolLocks.keySet().retainAll(activeSymbols);
+        System.out.println("Cleaned up locks. Active symbols: " + activeSymbols.size());
     }
 }
