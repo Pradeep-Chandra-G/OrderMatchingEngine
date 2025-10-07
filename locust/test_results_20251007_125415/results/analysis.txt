@@ -1,0 +1,125 @@
+
+================================================================================
+ LOAD TEST RESULTS SUMMARY
+================================================================================
+
+Generated: 2025-10-07 14:46:54
+
+================================================================================
+ ORDER ANALYSIS
+================================================================================
+
+Total Orders: 34368
+
+Status Breakdown:
+  FILLED      :  32108 ( 93.4%)
+  OPEN        :   2085 (  6.1%)
+  REJECTED    :    175 (  0.5%)
+
+Symbol Distribution:
+  AAPL    :  15522 ( 45.2%)
+  MSFT    :   9451 ( 27.5%)
+  GOOGL   :   9395 ( 27.3%)
+
+Order Type:
+  BUY:  17410 (50.7%)
+  SELL: 16958 (49.3%)
+
+Open Orders by Symbol:
+  AAPL    : 885 BUY, 506 SELL
+  GOOGL   : 166 BUY,   3 SELL
+  MSFT    : 525 BUY,   0 SELL
+
+================================================================================
+ TRADE ANALYSIS
+================================================================================
+
+Total Trades Executed: 32305
+
+Trade Metrics:
+  Total Quantity: 528,994 shares
+  Total Value: $104,532,833.32
+  Avg Trade Price: $206.01
+  Avg Trade Size: 16.4 shares
+
+Trades by Symbol:
+  AAPL    : 14470 trades, 274,499 shares, $40,322,572.41
+  GOOGL   : 9077 trades, 130,505 shares, $17,662,394.45
+  MSFT    : 8758 trades, 123,990 shares, $46,547,866.46
+
+Price Ranges:
+  AAPL    : $125.03 - $159.56 (avg: $146.84)
+  GOOGL   : $115.05 - $155.00 (avg: $136.16)
+  MSFT    : $355.01 - $394.98 (avg: $376.15)
+
+================================================================================
+ MATCHING PERFORMANCE
+================================================================================
+
+Match Rate: 93.4%
+
+Breakdown:
+  Successfully Matched:  32108 ( 93.4%)
+  Awaiting Match:         2085 (  6.1%)
+  Rejected:                175 (  0.5%)
+
+Match Rate by Symbol:
+  AAPL    :  90.5% (14046/15522)
+  GOOGL   :  98.1% (9219/9395)
+  MSFT    :  93.6% (8843/9451)
+
+================================================================================
+ TRADER ANALYSIS
+================================================================================
+
+Total Traders: 3
+
+
+Trader: Alice (6691986d-219d-4066-b40a-a6e67d0d3daa)
+  Balance: $827,683.90
+  Orders: 9979 total (9379 filled, 580 open, 20 rejected)
+  Positions:
+    AAPL    :  3,248 shares
+    GOOGL   :  1,005 shares
+    MSFT    :    771 shares
+  Activity: 5061 buys, 4918 sells
+
+Trader: Bob (c180c78f-232b-473e-b120-a0b81c60156f)
+  Balance: $1,244,884.05
+  Orders: 13748 total (12939 filled, 733 open, 76 rejected)
+  Positions:
+    AAPL    :    773 shares
+    GOOGL   :    909 shares
+    MSFT    :    901 shares
+  Activity: 6961 buys, 6787 sells
+
+Trader: Charlie (57986fa1-feec-453b-a8e7-19c838edb3b6)
+  Balance: $597,618.93
+  Orders: 10641 total (9790 filled, 772 open, 79 rejected)
+  Positions:
+    AAPL    :    802 shares
+    GOOGL   :  1,332 shares
+    MSFT    :  2,107 shares
+  Activity: 5388 buys, 5253 sells
+
+================================================================================
+ DATA INTEGRITY CHECKS
+================================================================================
+
+ No integrity issues found!
+
+================================================================================
+ OVERALL SUMMARY
+================================================================================
+
+ Orders Submitted: 34,368
+ Orders Filled: 32,108
+ Trades Executed: 32,305
+ Match Success Rate: 93.4%
+ Total Volume: 528,994 shares
+ Total Value: $104,532,833.32
+
+================================================================================
+ Analysis Complete!
+================================================================================
+

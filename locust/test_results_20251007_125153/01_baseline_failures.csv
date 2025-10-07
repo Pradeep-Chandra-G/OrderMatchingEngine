@@ -1,0 +1,7 @@
+Method,Name,Error,Occurrences
+GET,[Mixed] Status Check,HTTPError('500 Server Error:  for url: [Mixed] Status Check'),1
+POST,[Mixed] Normal Order,HTTPError('500 Server Error:  for url: [Mixed] Normal Order'),15
+POST,[Mixed] Aggressive Order,"ConnectionRefusedError(10061, '[WinError 10061] No connection could be made because the target machine actively refused it.')",2
+POST,[Mixed] Aggressive Order,HTTPError('500 Server Error:  for url: [Mixed] Aggressive Order'),10
+GET,[Mixed] Status Check,"ConnectionRefusedError(10061, '[WinError 10061] No connection could be made because the target machine actively refused it.')",2
+POST,[Mixed] Normal Order,"ConnectionRefusedError(10061, '[WinError 10061] No connection could be made because the target machine actively refused it.')",6
