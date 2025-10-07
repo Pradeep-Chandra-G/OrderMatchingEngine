@@ -7,17 +7,17 @@ from datetime import datetime
 # Configuration - Update these with actual trader IDs after creating test users
 TRADERS = {
     "alice": {
-        "id": "6691986d-219d-4066-b40a-a6e67d0d3daa",
+        "id": "22f6be37-f397-4041-bdf1-018af656711f",
         "initial_balance": 1000000,
         "initial_positions": {"AAPL": 1000, "GOOGL": 1000, "MSFT": 1000}
     },
     "bob": {
-        "id": "c180c78f-232b-473e-b120-a0b81c60156f",
+        "id": "739b00a7-5a0b-49e2-a859-cc0b9066a017",
         "initial_balance": 1000000,
         "initial_positions": {"AAPL": 1000, "GOOGL": 1000, "MSFT": 1000}
     },
     "charlie": {
-        "id": "57986fa1-feec-453b-a8e7-19c838edb3b6",
+        "id": "70140882-4317-415b-8a18-b32221eca643",
         "initial_balance": 1000000,
         "initial_positions": {"AAPL": 1000, "GOOGL": 1000, "MSFT": 1000}
     }

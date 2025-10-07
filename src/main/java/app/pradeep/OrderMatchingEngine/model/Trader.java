@@ -13,7 +13,11 @@ public class Trader {
     private String name;
     private double balance;
 
-    @ElementCollection
+    // CHANGE: Use EAGER fetch to avoid lazy initialization issues in multi-threaded context
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "trader_positions", joinColumns = @JoinColumn(name = "trader_id"))
+    @MapKeyColumn(name = "symbol")
+    @Column(name = "quantity")
     private Map<String, Integer> positions = new HashMap<>(); // symbol -> quantity
 
     // Getters and Setters

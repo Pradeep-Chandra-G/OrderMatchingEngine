@@ -8,6 +8,7 @@ import app.pradeep.OrderMatchingEngine.service.MatchingEngine;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -24,16 +25,14 @@ public class OrderController {
         this.traderRepo = traderRepo;
     }
 
-    // DTO for cleaner API
     public static class OrderRequest {
         private UUID traderId;
-        private String symbol;     // Stock symbol (AAPL, GOOGL, etc.)
+        private String symbol;
         private String type;       // BUY / SELL
         private String orderType;  // LIMIT / MARKET
         private double price;
         private int quantity;
 
-        // Getters & setters
         public UUID getTraderId() { return traderId; }
         public void setTraderId(UUID traderId) { this.traderId = traderId; }
         public String getSymbol() { return symbol; }
@@ -50,7 +49,6 @@ public class OrderController {
 
     @PostMapping
     public String placeOrder(@RequestBody OrderRequest request) {
-        // Validate required fields
         if (request.getSymbol() == null || request.getSymbol().trim().isEmpty()) {
             throw new RuntimeException("Symbol is required");
         }
@@ -60,7 +58,7 @@ public class OrderController {
 
         Order order = new Order();
         order.setTrader(trader);
-        order.setSymbol(request.getSymbol().toUpperCase()); // Normalize to uppercase
+        order.setSymbol(request.getSymbol().toUpperCase());
         order.setType(request.getType());
         order.setOrderType(request.getOrderType());
         order.setPrice(request.getPrice());
@@ -70,24 +68,80 @@ public class OrderController {
         return "Order submitted: " + order.getId() + " for " + order.getSymbol();
     }
 
+    /**
+     * Get all orders (from database - includes FILLED, CANCELLED, REJECTED)
+     */
     @GetMapping
     public List<Order> getAllOrders() {
         return orderRepo.findAll();
     }
 
+    /**
+     * Get active orders (in-memory OPEN orders)
+     */
+    @GetMapping("/active")
+    public List<Order> getActiveOrders() {
+        return engine.getActiveOrders();
+    }
+
+    /**
+     * Get active orders for a specific symbol
+     */
+    @GetMapping("/active/symbol/{symbol}")
+    public List<Order> getActiveOrdersForSymbol(@PathVariable String symbol) {
+        return engine.getActiveOrdersForSymbol(symbol.toUpperCase());
+    }
+
+    /**
+     * Get order book snapshot for a symbol
+     */
+    @GetMapping("/orderbook/{symbol}")
+    public Map<String, Object> getOrderBook(@PathVariable String symbol) {
+        return engine.getOrderBookSnapshot(symbol.toUpperCase());
+    }
+
+    /**
+     * Get orders by symbol (from database)
+     */
     @GetMapping("/symbol/{symbol}")
     public List<Order> getOrdersBySymbol(@PathVariable String symbol) {
         return orderRepo.findBySymbol(symbol.toUpperCase());
     }
 
+    /**
+     * Get orders by symbol and status (from database)
+     */
     @GetMapping("/symbol/{symbol}/status/{status}")
     public List<Order> getOrdersBySymbolAndStatus(@PathVariable String symbol, @PathVariable String status) {
         return orderRepo.findBySymbolAndStatus(symbol.toUpperCase(), status.toUpperCase());
     }
 
+    /**
+     * Cancel an order
+     */
     @DeleteMapping("/{id}")
     public String cancelOrder(@PathVariable UUID id) {
-        orderRepo.deleteById(id);
+        engine.cancelOrder(id);
         return "Order cancelled: " + id;
+    }
+
+    /**
+     * Get statistics for all symbols
+     */
+    @GetMapping("/stats")
+    public Map<String, String> getStats() {
+        return engine.getSymbolStats();
+    }
+
+    /**
+     * Get engine metrics
+     */
+    @GetMapping("/metrics")
+    public Map<String, Object> getMetrics() {
+        return Map.of(
+                "workerCount", engine.getWorkerCount(),
+                "activeOrderCount", engine.getActiveOrderCount(),
+                "symbolStats", engine.getSymbolStats()
+        );
     }
 }
