@@ -13,12 +13,16 @@ public class Trader {
     private String name;
     private double balance;
 
-    // CHANGE: Use EAGER fetch to avoid lazy initialization issues in multi-threaded context
+    // CRITICAL: Add version field for optimistic locking
+    @Version
+    private Long version;
+
+    // Use EAGER fetch to avoid lazy initialization issues
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "trader_positions", joinColumns = @JoinColumn(name = "trader_id"))
     @MapKeyColumn(name = "symbol")
     @Column(name = "quantity")
-    private Map<String, Integer> positions = new HashMap<>(); // symbol -> quantity
+    private Map<String, Integer> positions = new HashMap<>();
 
     // Getters and Setters
 
@@ -44,6 +48,14 @@ public class Trader {
 
     public void setBalance(double balance) {
         this.balance = balance;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 
     public Map<String, Integer> getPositions() {

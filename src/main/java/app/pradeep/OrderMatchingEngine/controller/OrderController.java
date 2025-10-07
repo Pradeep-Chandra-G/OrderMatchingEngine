@@ -5,8 +5,11 @@ import app.pradeep.OrderMatchingEngine.model.Trader;
 import app.pradeep.OrderMatchingEngine.repository.OrderRepository;
 import app.pradeep.OrderMatchingEngine.repository.TraderRepository;
 import app.pradeep.OrderMatchingEngine.service.MatchingEngine;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,25 +50,69 @@ public class OrderController {
         public void setQuantity(int quantity) { this.quantity = quantity; }
     }
 
-    @PostMapping
-    public String placeOrder(@RequestBody OrderRequest request) {
-        if (request.getSymbol() == null || request.getSymbol().trim().isEmpty()) {
-            throw new RuntimeException("Symbol is required");
+    public static class OrderResponse {
+        private UUID id;
+        private String status;
+        private String symbol;
+        private String message;
+
+        public OrderResponse(UUID id, String status, String symbol, String message) {
+            this.id = id;
+            this.status = status;
+            this.symbol = symbol;
+            this.message = message;
         }
 
-        Trader trader = traderRepo.findById(request.getTraderId())
-                .orElseThrow(() -> new RuntimeException("Trader not found"));
+        public UUID getId() { return id; }
+        public void setId(UUID id) { this.id = id; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getSymbol() { return symbol; }
+        public void setSymbol(String symbol) { this.symbol = symbol; }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
+    }
 
-        Order order = new Order();
-        order.setTrader(trader);
-        order.setSymbol(request.getSymbol().toUpperCase());
-        order.setType(request.getType());
-        order.setOrderType(request.getOrderType());
-        order.setPrice(request.getPrice());
-        order.setQuantity(request.getQuantity());
+    @PostMapping
+    public ResponseEntity<?> placeOrder(@RequestBody OrderRequest request) {
+        try {
+            if (request.getSymbol() == null || request.getSymbol().trim().isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Symbol is required"));
+            }
 
-        engine.submitOrder(order);
-        return "Order submitted: " + order.getId() + " for " + order.getSymbol();
+            Trader trader = traderRepo.findById(request.getTraderId())
+                    .orElseThrow(() -> new RuntimeException("Trader not found"));
+
+            Order order = new Order();
+            order.setTrader(trader);
+            order.setSymbol(request.getSymbol().toUpperCase());
+            order.setType(request.getType());
+            order.setOrderType(request.getOrderType());
+            order.setPrice(request.getPrice());
+            order.setQuantity(request.getQuantity());
+
+            engine.submitOrder(order);
+
+            // Return proper JSON response
+            OrderResponse response = new OrderResponse(
+                    order.getId(),
+                    order.getStatus(),
+                    order.getSymbol(),
+                    "Order " + order.getStatus().toLowerCase()
+            );
+
+            // Return 400 for rejected orders, 200 for accepted
+            if ("REJECTED".equals(order.getStatus())) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+            }
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", e.getMessage()));
+        }
     }
 
     /**
@@ -120,9 +167,18 @@ public class OrderController {
      * Cancel an order
      */
     @DeleteMapping("/{id}")
-    public String cancelOrder(@PathVariable UUID id) {
-        engine.cancelOrder(id);
-        return "Order cancelled: " + id;
+    public ResponseEntity<?> cancelOrder(@PathVariable UUID id) {
+        try {
+            engine.cancelOrder(id);
+            return ResponseEntity.ok(Map.of(
+                    "id", id.toString(),
+                    "status", "CANCELLED",
+                    "message", "Order cancelled successfully"
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", e.getMessage()));
+        }
     }
 
     /**

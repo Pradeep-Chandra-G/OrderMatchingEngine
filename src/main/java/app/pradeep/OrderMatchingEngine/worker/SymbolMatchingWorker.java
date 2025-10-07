@@ -144,9 +144,9 @@ public class SymbolMatchingWorker implements Runnable {
         transactionTemplate.execute(status -> {
             try {
                 // Re-fetch traders within transaction to get managed entities with positions loaded
-                Trader buyer = traderRepo.findById(buyOrder.getTrader().getId())
+                Trader buyer = traderRepo.findByIdForUpdate(buyOrder.getTrader().getId())
                         .orElseThrow(() -> new RuntimeException("Buyer not found"));
-                Trader seller = traderRepo.findById(sellOrder.getTrader().getId())
+                Trader seller = traderRepo.findByIdForUpdate(sellOrder.getTrader().getId())
                         .orElseThrow(() -> new RuntimeException("Seller not found"));
 
                 // Update trader positions and balances
