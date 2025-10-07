@@ -169,33 +169,33 @@ def check_data_integrity(orders, trades, traders):
     # Check for negative balances
     for trader in traders:
         if trader['balance'] < 0:
-            issues.append(f"⚠️  Trader {trader['name']} has negative balance: ${trader['balance']:.2f}")
+            issues.append(f"Trader {trader['name']} has negative balance: ${trader['balance']:.2f}")
 
     # Check for negative positions
     for trader in traders:
         for symbol, qty in trader['positions'].items():
             if qty < 0:
-                issues.append(f"⚠️  Trader {trader['name']} has negative {symbol} position: {qty}")
+                issues.append(f"  Trader {trader['name']} has negative {symbol} position: {qty}")
 
     # Check for orphaned trades
     order_ids = {o['id'] for o in orders}
     for trade in trades:
         if trade['buyOrder']['id'] not in order_ids:
-            issues.append(f"⚠️  Trade {trade['id']} references non-existent buy order")
+            issues.append(f"  Trade {trade['id']} references non-existent buy order")
         if trade['sellOrder']['id'] not in order_ids:
-            issues.append(f"⚠️  Trade {trade['id']} references non-existent sell order")
+            issues.append(f"  Trade {trade['id']} references non-existent sell order")
 
     # Check for filled orders with remaining quantity
     for order in orders:
         if order['status'] == 'FILLED' and order['quantity'] > 0:
-            issues.append(f"⚠️  Order {order['id']} marked FILLED but has quantity {order['quantity']}")
+            issues.append(f"  Order {order['id']} marked FILLED but has quantity {order['quantity']}")
 
     if issues:
         print("Issues Found:")
         for issue in issues:
             print(f"  {issue}")
     else:
-        print("✅ No integrity issues found!")
+        print(" No integrity issues found!")
 
 def calculate_match_rate(orders):
     """Calculate match rate"""
@@ -238,7 +238,7 @@ def generate_summary():
     orders, trades, traders = get_data()
 
     if orders is None:
-        print("\n❌ Failed to fetch data from server. Is it running?")
+        print("\n Failed to fetch data from server. Is it running?")
         return
 
     # Run all analyses
@@ -255,16 +255,16 @@ def generate_summary():
     total_trades = len(trades)
     filled_orders = sum(1 for o in orders if o['status'] == 'FILLED')
 
-    print(f"📊 Orders Submitted: {total_orders:,}")
-    print(f"✅ Orders Filled: {filled_orders:,}")
-    print(f"🤝 Trades Executed: {total_trades:,}")
-    print(f"📈 Match Success Rate: {(filled_orders/total_orders*100) if total_orders > 0 else 0:.1f}%")
+    print(f" Orders Submitted: {total_orders:,}")
+    print(f" Orders Filled: {filled_orders:,}")
+    print(f" Trades Executed: {total_trades:,}")
+    print(f" Match Success Rate: {(filled_orders/total_orders*100) if total_orders > 0 else 0:.1f}%")
 
     if total_trades > 0:
         total_volume = sum(t['quantity'] for t in trades)
         total_value = sum(t['quantity'] * t['price'] for t in trades)
-        print(f"💰 Total Volume: {total_volume:,} shares")
-        print(f"💵 Total Value: ${total_value:,.2f}")
+        print(f" Total Volume: {total_volume:,} shares")
+        print(f" Total Value: ${total_value:,.2f}")
 
     print("\n" + "="*80)
     print(" Analysis Complete!")

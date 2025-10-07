@@ -1,6 +1,9 @@
 HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
+.csv
+.html
+
 !**/src/main/**/target/
 !**/src/test/**/target/
 
