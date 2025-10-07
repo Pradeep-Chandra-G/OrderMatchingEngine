@@ -5,10 +5,11 @@ import app.pradeep.OrderMatchingEngine.repository.*;
 import org.springframework.transaction.support.TransactionTemplate;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.UUID;
 
 /**
  * Dedicated worker thread for matching orders for a single symbol.
- * Each symbol gets its own thread for parallel processing.
+ * Enhanced with deadlock prevention via consistent lock ordering.
  */
 public class SymbolMatchingWorker implements Runnable {
 
@@ -35,9 +36,6 @@ public class SymbolMatchingWorker implements Runnable {
         this.transactionTemplate = transactionTemplate;
     }
 
-    /**
-     * Submit an order to this symbol's worker thread
-     */
     public void submitOrder(Order order) {
         try {
             incomingOrders.put(order);
@@ -53,7 +51,6 @@ public class SymbolMatchingWorker implements Runnable {
 
         while (running || !incomingOrders.isEmpty()) {
             try {
-                // Wait for incoming order (blocks if queue is empty)
                 Order newOrder = incomingOrders.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
 
                 if (newOrder != null) {
@@ -73,38 +70,25 @@ public class SymbolMatchingWorker implements Runnable {
         System.out.println("Stopped matching worker for symbol: " + symbol);
     }
 
-    /**
-     * Process a new order: add to book and attempt matching
-     */
     private void processOrder(Order order) {
         System.out.println("Processing " + order.getType() + " order for " + symbol +
                 ": " + order.getQuantity() + " @ $" + order.getPrice());
 
-        // Add to appropriate queue
         orderBook.addOrder(order);
-
-        // Attempt to match orders
         matchOrders();
     }
 
-    /**
-     * Match orders in the order book
-     */
     private void matchOrders() {
         while (orderBook.hasBuyOrders() && orderBook.hasSellOrders()) {
             Order bestBuy = orderBook.peekBestBuy();
             Order bestSell = orderBook.peekBestSell();
 
-            // Check if orders can match
             if (bestBuy.getPrice() >= bestSell.getPrice()) {
-                // Remove from queues
                 orderBook.pollBestBuy();
                 orderBook.pollBestSell();
 
-                // Execute the trade
                 executeMatch(bestBuy, bestSell);
 
-                // If partially filled, re-add to queue
                 if (bestBuy.getQuantity() > 0 && "OPEN".equals(bestBuy.getStatus())) {
                     orderBook.addOrder(bestBuy);
                 }
@@ -112,27 +96,25 @@ public class SymbolMatchingWorker implements Runnable {
                     orderBook.addOrder(bestSell);
                 }
             } else {
-                // No match possible, stop trying
                 break;
             }
         }
     }
 
     /**
-     * Execute a trade between two orders
+     * CRITICAL DEADLOCK FIX: Always acquire locks in consistent order (by UUID)
+     * This prevents circular wait conditions between transactions
      */
     private void executeMatch(Order buyOrder, Order sellOrder) {
         int tradeQuantity = Math.min(buyOrder.getQuantity(), sellOrder.getQuantity());
-        double tradePrice = sellOrder.getPrice(); // Price improvement for buyer
+        double tradePrice = sellOrder.getPrice();
 
         System.out.println("Executing trade: " + tradeQuantity + " shares of " + symbol +
                 " at $" + tradePrice);
 
-        // Update order quantities in-memory
         buyOrder.setQuantity(buyOrder.getQuantity() - tradeQuantity);
         sellOrder.setQuantity(sellOrder.getQuantity() - tradeQuantity);
 
-        // Update order status if fully filled
         if (buyOrder.getQuantity() == 0) {
             buyOrder.setStatus("FILLED");
         }
@@ -140,74 +122,108 @@ public class SymbolMatchingWorker implements Runnable {
             sellOrder.setStatus("FILLED");
         }
 
-        // Persist to database in a transaction
-        transactionTemplate.execute(status -> {
+        // ============ DEADLOCK PREVENTION ============
+        // Lock traders in consistent order (smaller UUID first)
+        UUID buyerId = buyOrder.getTrader().getId();
+        UUID sellerId = sellOrder.getTrader().getId();
+
+        UUID firstId = buyerId.compareTo(sellerId) < 0 ? buyerId : sellerId;
+        UUID secondId = buyerId.compareTo(sellerId) < 0 ? sellerId : buyerId;
+        boolean buyerFirst = buyerId.equals(firstId);
+
+        // Persist with retry logic for deadlock recovery
+        int maxRetries = 3;
+        int retryCount = 0;
+
+        while (retryCount < maxRetries) {
             try {
-                // Re-fetch traders within transaction to get managed entities with positions loaded
-                Trader buyer = traderRepo.findByIdForUpdate(buyOrder.getTrader().getId())
-                        .orElseThrow(() -> new RuntimeException("Buyer not found"));
-                Trader seller = traderRepo.findByIdForUpdate(sellOrder.getTrader().getId())
-                        .orElseThrow(() -> new RuntimeException("Seller not found"));
+                transactionTemplate.execute(status -> {
+                    try {
+                        // Lock traders in consistent order
+                        Trader firstTrader = traderRepo.findByIdForUpdate(firstId)
+                                .orElseThrow(() -> new RuntimeException("Trader not found: " + firstId));
+                        Trader secondTrader = traderRepo.findByIdForUpdate(secondId)
+                                .orElseThrow(() -> new RuntimeException("Trader not found: " + secondId));
 
-                // Update trader positions and balances
-                double totalCost = tradePrice * tradeQuantity;
-                buyer.setBalance(buyer.getBalance() - totalCost);
+                        // Assign back based on original roles
+                        Trader buyer = buyerFirst ? firstTrader : secondTrader;
+                        Trader seller = buyerFirst ? secondTrader : firstTrader;
 
-                // Initialize positions map if null
-                if (buyer.getPositions() == null) {
-                    buyer.setPositions(new java.util.HashMap<>());
-                }
-                buyer.getPositions().merge(symbol, tradeQuantity, Integer::sum);
+                        // Update trader positions and balances
+                        double totalCost = tradePrice * tradeQuantity;
+                        buyer.setBalance(buyer.getBalance() - totalCost);
 
-                seller.setBalance(seller.getBalance() + totalCost);
+                        if (buyer.getPositions() == null) {
+                            buyer.setPositions(new java.util.HashMap<>());
+                        }
+                        buyer.getPositions().merge(symbol, tradeQuantity, Integer::sum);
 
-                // Initialize positions map if null
-                if (seller.getPositions() == null) {
-                    seller.setPositions(new java.util.HashMap<>());
-                }
-                seller.getPositions().merge(symbol, -tradeQuantity, Integer::sum);
+                        seller.setBalance(seller.getBalance() + totalCost);
 
-                // Save traders first
-                traderRepo.save(buyer);
-                traderRepo.save(seller);
+                        if (seller.getPositions() == null) {
+                            seller.setPositions(new java.util.HashMap<>());
+                        }
+                        seller.getPositions().merge(symbol, -tradeQuantity, Integer::sum);
 
-                // CRITICAL FIX: Save orders BEFORE creating trade (trade references orders)
-                // This ensures orders exist in DB before Hibernate tries to resolve the references
-                Order managedBuyOrder = orderRepo.save(buyOrder);
-                Order managedSellOrder = orderRepo.save(sellOrder);
+                        // Save in same consistent order
+                        traderRepo.save(firstTrader);
+                        traderRepo.save(secondTrader);
 
-                // Create trade record with managed order entities
-                Trade trade = new Trade();
-                trade.setBuyOrder(managedBuyOrder);
-                trade.setSellOrder(managedSellOrder);
-                trade.setQuantity(tradeQuantity);
-                trade.setPrice(tradePrice);
-                tradeRepo.save(trade);
+                        // Save orders
+                        Order managedBuyOrder = orderRepo.save(buyOrder);
+                        Order managedSellOrder = orderRepo.save(sellOrder);
 
-                System.out.println("Trade persisted for " + symbol);
-                return null;
+                        // Create trade record
+                        Trade trade = new Trade();
+                        trade.setBuyOrder(managedBuyOrder);
+                        trade.setSellOrder(managedSellOrder);
+                        trade.setQuantity(tradeQuantity);
+                        trade.setPrice(tradePrice);
+                        tradeRepo.save(trade);
+
+                        System.out.println("Trade persisted for " + symbol);
+                        return null;
+
+                    } catch (Exception e) {
+                        System.err.println("Error persisting trade: " + e.getMessage());
+                        status.setRollbackOnly();
+                        throw e;
+                    }
+                });
+
+                // Success - break retry loop
+                break;
 
             } catch (Exception e) {
-                System.err.println("Error persisting trade: " + e.getMessage());
-                e.printStackTrace();
-                status.setRollbackOnly();
-                throw e;
+                retryCount++;
+                if (e.getMessage() != null && e.getMessage().contains("deadlock")) {
+                    System.err.println("Deadlock detected, retry " + retryCount + "/" + maxRetries);
+                    if (retryCount < maxRetries) {
+                        try {
+                            // Exponential backoff: 10ms, 20ms, 40ms
+                            Thread.sleep(10 * (long) Math.pow(2, retryCount - 1));
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException("Retry interrupted", ie);
+                        }
+                    } else {
+                        System.err.println("Max retries exceeded for trade execution");
+                        throw new RuntimeException("Failed to execute trade after retries", e);
+                    }
+                } else {
+                    // Non-deadlock error, don't retry
+                    throw e;
+                }
             }
-        });
+        }
 
         System.out.println("Trade executed successfully for " + symbol);
     }
 
-    /**
-     * Shutdown this worker
-     */
     public void shutdown() {
         running = false;
     }
 
-    /**
-     * Get statistics about this order book
-     */
     public String getStats() {
         return String.format("Symbol: %s | Buy Orders: %d | Sell Orders: %d | Pending: %d",
                 symbol, orderBook.getBuyOrderCount(), orderBook.getSellOrderCount(),

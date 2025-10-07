@@ -12,9 +12,9 @@ import logging
 
 # Update with your actual trader IDs
 TRADERS = {
-    "alice": "9d9ef163-dea6-45eb-80f0-2630358d7ee4",
-    "bob": "22c996bc-99a4-420f-bb2f-b729bd81bd4c",
-    "charlie": "c357c4df-b8a7-4877-8521-24830967e826"
+    "alice": "a0081bb2-42fa-4244-ad87-84a6c9a50f03",
+    "bob": "a1b7f888-0f55-4df6-984d-e3e873969c7c",
+    "charlie": "37f22c79-0799-4c5c-bf68-d2b89c0aba58"
 }
 
 # Expanded symbol universe for realistic testing

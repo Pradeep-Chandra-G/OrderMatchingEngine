@@ -25,6 +25,9 @@ public class MatchingEngine {
     private final ExecutorService workerExecutor;
     private final ConcurrentHashMap<UUID, Order> activeOrders = new ConcurrentHashMap<>();
 
+    // NEW: In-memory trader cache for risk checks (reduces DB reads)
+    private final ConcurrentHashMap<UUID, TraderSnapshot> traderCache = new ConcurrentHashMap<>();
+
     public MatchingEngine(OrderRepository orderRepo,
                           TradeRepository tradeRepo,
                           TraderRepository traderRepo,
@@ -36,7 +39,9 @@ public class MatchingEngine {
         this.riskService = riskService;
         this.transactionTemplate = transactionTemplate;
 
-        this.workerExecutor = Executors.newCachedThreadPool(r -> {
+        // Use fixed thread pool with core count * 2 for better resource management
+        int poolSize = Math.max(4, Runtime.getRuntime().availableProcessors() * 2);
+        this.workerExecutor = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = new Thread(r);
             t.setName("SymbolWorker-" + t.getId());
             t.setDaemon(false);
@@ -47,6 +52,13 @@ public class MatchingEngine {
     @PostConstruct
     public void initialize() {
         System.out.println("Initializing Order Matching Engine...");
+
+        // Load all traders into cache
+        List<Trader> allTraders = traderRepo.findAll();
+        for (Trader trader : allTraders) {
+            traderCache.put(trader.getId(), new TraderSnapshot(trader));
+        }
+        System.out.println("Cached " + traderCache.size() + " traders");
 
         List<Order> openOrders = orderRepo.findByStatus("OPEN");
         System.out.println("Loading " + openOrders.size() + " open orders from database...");
@@ -72,40 +84,43 @@ public class MatchingEngine {
         System.out.println("Order Matching Engine initialized with " + symbolWorkers.size() + " symbol workers");
     }
 
+    /**
+     * OPTIMIZED: Fast-path validation using cached trader data
+     */
     @Transactional
     public void submitOrder(Order order) {
-        // Eagerly fetch trader with positions
-        Trader trader = traderRepo.findById(order.getTrader().getId())
-                .orElseThrow(() -> new RuntimeException("Trader not found"));
+        UUID traderId = order.getTrader().getId();
 
-        if (trader.getPositions() == null) {
-            trader.setPositions(new HashMap<>());
+        // FAST PATH: Check cache first
+        TraderSnapshot snapshot = traderCache.get(traderId);
+        if (snapshot == null) {
+            // Cache miss - load from DB and cache
+            Trader trader = traderRepo.findById(traderId)
+                    .orElseThrow(() -> new RuntimeException("Trader not found"));
+            snapshot = new TraderSnapshot(trader);
+            traderCache.put(traderId, snapshot);
         }
 
-        order.setTrader(trader);
+        // Create temporary trader object for validation (no DB hit)
+        Trader tempTrader = snapshot.toTrader();
+        order.setTrader(tempTrader);
 
-        // Risk validation
+        // EARLY REJECTION: Validate BEFORE entering matching engine
         if (!riskService.validate(order)) {
             order.setStatus("REJECTED");
-            orderRepo.save(order); // Persist rejected orders
+            orderRepo.save(order);
             System.out.println("Order REJECTED for " + order.getSymbol() + " - Risk check failed");
             return;
         }
 
-        // Set order as OPEN (in-memory only)
+        // Order is valid - proceed to matching
         order.setStatus("OPEN");
         activeOrders.put(order.getId(), order);
-
-        // FIX: Don't persist OPEN orders - keep them in-memory only
-        // They will be persisted when FILLED, CANCELLED, or on shutdown
 
         System.out.println("Order OPEN for " + order.getSymbol() + ": " + order.getType() +
                 " " + order.getQuantity() + " @ $" + order.getPrice());
 
-        // Get or create worker for this symbol
         SymbolMatchingWorker worker = getOrCreateWorker(order.getSymbol());
-
-        // Submit order to the symbol's dedicated thread
         worker.submitOrder(order);
     }
 
@@ -118,6 +133,28 @@ public class MatchingEngine {
             workerExecutor.submit(worker);
             return worker;
         });
+    }
+
+    /**
+     * Update trader cache after a trade completes
+     */
+    public void updateTraderCache(UUID traderId, double balanceDelta, String symbol, int positionDelta) {
+        traderCache.computeIfPresent(traderId, (id, snapshot) -> {
+            snapshot.balance += balanceDelta;
+            if (positionDelta != 0) {
+                snapshot.positions.merge(symbol, positionDelta, Integer::sum);
+            }
+            return snapshot;
+        });
+    }
+
+    /**
+     * Refresh cache for a specific trader (call after external updates)
+     */
+    public void refreshTraderCache(UUID traderId) {
+        traderRepo.findById(traderId).ifPresent(trader ->
+                traderCache.put(traderId, new TraderSnapshot(trader))
+        );
     }
 
     @Transactional
@@ -140,9 +177,7 @@ public class MatchingEngine {
             worker.getOrderBook().removeOrder(order);
         }
 
-        // Persist cancelled order
         orderRepo.save(order);
-
         System.out.println("Order cancelled: " + orderId + " for " + order.getSymbol());
     }
 
@@ -226,5 +261,29 @@ public class MatchingEngine {
 
     public int getActiveOrderCount() {
         return activeOrders.size();
+    }
+
+    /**
+     * Lightweight trader snapshot for caching
+     * Reduces memory footprint vs caching full Trader entities
+     */
+    private static class TraderSnapshot {
+        UUID id;
+        double balance;
+        Map<String, Integer> positions;
+
+        TraderSnapshot(Trader trader) {
+            this.id = trader.getId();
+            this.balance = trader.getBalance();
+            this.positions = new ConcurrentHashMap<>(trader.getPositions());
+        }
+
+        Trader toTrader() {
+            Trader trader = new Trader();
+            trader.setId(id);
+            trader.setBalance(balance);
+            trader.setPositions(new HashMap<>(positions));
+            return trader;
+        }
     }
 }
